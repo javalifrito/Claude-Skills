@@ -13,16 +13,20 @@ Run this **before** any install, enable, or first use of a shared skill/plugin. 
 - Download/extract into a fresh empty dir in the scratchpad (e.g. `<scratchpad>/audit-<name>/src`). Run scripts from this skill's folder with `python3 -I`, passing paths as arguments.
 - No install until the user sees the verdict and says yes. A REJECT verdict needs the user's explicit override to proceed.
 
+`<skill-dir>` = the folder this SKILL.md is in (Mac: `~/.claude/skills/skill-security-audit`).
+
+**Phone / claude.ai:** same steps. If `source_check.py` can't reach api.github.com, get the same facts with web fetch. Files there don't persist: give the audit-log line and any `--mark-clean` result to the user instead of relying on the saved file.
+
 ## Steps
 
 1. **Get the exact artifact.** Clone/download the exact version that would be installed (pin the commit SHA / tag). Record the SHA and the source URL. For marketplace plugins: use `SearchPlugins` to read `publisher.tier` (`anthropic` = first-party; `community` + `directory_review` = reviewed listing, still audit), `reach` (`contained` < `privileged` < `remote`), and `components`.
 
-2. **Source & reputation.** `python3 -I ~/.claude/skills/skill-security-audit/scripts/source_check.py <url>`
+2. **Source & reputation.** `python3 -I <skill-dir>/scripts/source_check.py <url>`
    - Shows: allow/block list status, stars, forks, repo and owner age, followers, contributors, license, last push, archived/fork, signed commits, and issues mentioning security keywords.
    - Open and read the flagged issues and recent issue/PR comments (built-in browser or web-fetch) for complaints: data leaks, unexpected network calls, ads, account bans, maintainer takeover.
    - Check whether the source is the **real** upstream. Look for typosquats (`anthrop1c`, `claude-skils`), and check that the README author matches the repo owner.
 
-3. **Static scan.** `python3 -I ~/.claude/skills/skill-security-audit/scripts/scan.py <src-dir>`. It lists every file, every external domain, and its findings (CRITICAL/HIGH/MEDIUM/LOW).
+3. **Static scan.** `python3 -I <skill-dir>/scripts/scan.py <src-dir>`. It lists every file, every external domain, and its findings (CRITICAL/HIGH/MEDIUM/LOW).
 
 4. **Manual review (required; the scanner is only triage).** Read **every** file in the inventory, including sub-skills, `references/`, `scripts/`, `agents/`, `commands/`, `hooks/`, `.claude-plugin/plugin.json`, `.mcp.json`, `package.json`, `requirements.txt`, and hidden files. For each, answer:
    | # | Check | Look for |
@@ -59,7 +63,7 @@ Run this **before** any install, enable, or first use of a shared skill/plugin. 
    ```
    Verdict rules: any confirmed CRITICAL → REJECT. A confirmed HIGH without a strong legitimate reason → REJECT. Otherwise → APPROVE WITH CONDITIONS. APPROVE only when there are no HIGH findings, the source is reputable, and the code is fully reviewed.
 
-7. **Record.** Append one line to `~/.claude/skills/skill-security-audit/audit-log.md`: date, skill, source@sha, verdict, top reason. Offer to add the source to the allowlist or blocklist in `sources.json` (edit only on the user's yes).
+7. **Record.** Append one line to `<skill-dir>/audit-log.md`: date, skill, source@sha, verdict, top reason. Offer to add the source to the allowlist or blocklist in `sources.json` (edit only on the user's yes).
 
 8. **Re-audit on update.** Any new version or SHA means a new audit. Diff against the last audited SHA and review only what changed, plus any new dependencies.
 
