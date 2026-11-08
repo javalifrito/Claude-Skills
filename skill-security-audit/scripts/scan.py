@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static security scanner for Claude skills / plugins / MCP bundles.
-Usage: python3 -I scan.py <path-to-skill-dir-or-file> [--json]
+Usage: python3 -I scan.py <path-to-skill-dir-or-file> [--json] [--full] [--color] [--mark-clean]
+--color: ANSI gradient cost bar for a terminal (default is emoji, which also renders in chat/phone).
 Reads files only. Never executes anything from the target.
 Exit code: 0 = no HIGH/CRITICAL, 1 = HIGH found, 2 = CRITICAL found.
 """
@@ -75,6 +76,71 @@ TEXT_LIMIT = 2_000_000
 URL_RE = re.compile(r"https?://([a-zA-Z0-9.-]+)")
 B64_RE = re.compile(r"[A-Za-z0-9+/=]{200,}")
 HEX_RE = re.compile(r"(\\x[0-9a-fA-F]{2}){20,}")
+
+
+# Plain "what do I do" verdict per severity (shown for every level present).
+ACTION = {
+    "CRITICAL": "Do not install.",
+    "HIGH": "Do not install until fixed, unless the author is trusted and the reason is clear.",
+    "MEDIUM": "Install only after checking the flagged lines; usually a small fix or a condition.",
+    "LOW": "OK to install; just be aware.",
+}
+# Cheapest rewrite per category: smallest edit that removes the risk and keeps the skill's purpose.
+FIX = {
+    "rce": "Replace eval/exec/shell calls with a fixed command list or a safe parser (json.loads, ast.literal_eval); pin any npx/uvx package to an exact version.",
+    "deps": "Pin every dependency to an exact version; delete install-time scripts.",
+    "secrets": "Remove the credential/env read; ask the user to pass only the one value needed.",
+    "privacy": "Remove the personal-data read; work only on files the user names.",
+    "exfil": "Delete the outbound call, or limit it to one documented domain that receives no user data.",
+    "backdoor": "Delete the persistence/privilege step; run only when the user invokes the skill.",
+    "claude-tamper": "Remove edits to Claude settings/hooks/memory; tell the user what to change instead.",
+    "injection": "Delete the hidden or overriding text; keep only plain task steps.",
+    "destructive": "Scope the delete to the skill's own temp folder and ask before running it.",
+    "ads": "Strip promo/affiliate/tracking text and links.",
+    "crypto": "Remove the miner or wallet address.",
+    "binary": "Replace the binary/archive with readable source, or drop it.",
+    "obfuscation": "Replace the encoded blob/minified code with readable source.",
+    "filesystem": "Remove the symlink/hidden file or explain why it's needed.",
+}
+# Token cost model (approx, chars/4). Fix cost = per-finding context read + edit; LOW needs no fix.
+FIX_TOKENS = {"CRITICAL": 800, "HIGH": 600, "MEDIUM": 300, "LOW": 0}
+AUDIT_OVERHEAD, FIX_OVERHEAD = 3000, 1000  # SKILL.md + report; re-scan + summary
+SIZES = [(5_000, "Very Small"), (20_000, "Small"), (60_000, "Medium"), (150_000, "Large"), (float("inf"), "Very Large")]
+BAR_CELLS = "🟩🟩🟩🟨🟨🟨🟧🟧🟥🟥"  # green -> red gradient; works in chat on Mac and phone
+
+
+def size_label(tokens):
+    return next(lbl for lim, lbl in SIZES if tokens < lim)
+
+
+def cost_bar(tokens, color=False):
+    """10-cell gradient bar, log scale: 1k tokens = 1 cell, 300k+ = full."""
+    import math
+    n = max(1, min(10, round(10 * math.log10(max(tokens, 1000) / 1000) / math.log10(300))))
+    if not color:
+        return BAR_CELLS[:n] + "⬜" * (10 - n)
+    cells = []
+    for i in range(10):  # ANSI truecolor, green -> yellow -> red
+        t = i / 9
+        r, g = (int(510 * t), 200) if t < 0.5 else (255, int(200 * (2 - 2 * t)))
+        cells.append(f"\033[38;2;{min(r, 255)};{g};40m█" if i < n else "\033[38;2;90;90;90m░")
+    return "".join(cells) + "\033[0m"
+
+
+def estimate(paths, unchanged, merged):
+    read_chars = 0
+    for full, rel in paths:
+        if rel in unchanged:
+            continue
+        try:
+            if os.path.splitext(full)[1].lower() not in BIN_EXT | ARCHIVE_EXT and not os.path.islink(full):
+                read_chars += min(os.path.getsize(full), TEXT_LIMIT)
+        except OSError:
+            pass
+    audit = AUDIT_OVERHEAD + read_chars // 4 + 40 * len(merged)
+    per = [FIX_TOKENS[m["sev"]] for m in merged.values()]
+    fix = (FIX_OVERHEAD + sum(per)) if any(per) else 0
+    return audit, fix
 
 
 def add(findings, sev, cat, path, line, msg, snippet=""):
@@ -171,22 +237,49 @@ def main():
         import datetime
         for r, h in hashes.items(): cache[h] = {"file": r, "date": datetime.date.today().isoformat()}
         json.dump(cache, open(cache_path, "w"), indent=0)
-    result = {"target": root, "files": inventory, "domains": dict(domains.most_common()), "counts": dict(counts), "findings": findings, "unchanged_reviewed": unchanged}
+    merged = {}  # one entry per file:line, highest severity wins
+    for f in findings:
+        k = (f["file"], f["line"])
+        m = merged.setdefault(k, {"sev": f["severity"], "tags": [], "cats": [], "snip": f["snippet"]})
+        if SEV_ORDER[f["severity"]] > SEV_ORDER[m["sev"]]: m["sev"] = f["severity"]
+        tag = f"{f['category']}:{f['issue']}"
+        if tag not in m["tags"]: m["tags"].append(tag)
+        if f["category"] not in m["cats"]: m["cats"].append(f["category"])
+    audit_t, fix_t = estimate(paths, set(unchanged), merged)
+    present = [s for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW") if counts.get(s)]
+    fix_cats = []  # categories needing a fix (MEDIUM+), worst first
+    for m in sorted(merged.values(), key=lambda m: -SEV_ORDER[m["sev"]]):
+        if SEV_ORDER[m["sev"]] >= 2:
+            for c in m["cats"]:
+                if c not in fix_cats and c in FIX: fix_cats.append(c)
+    cost = {"audit_tokens": audit_t, "audit_size": size_label(audit_t), "fix_tokens": fix_t,
+            "fix_size": size_label(fix_t) if fix_t else "None"}
+    result = {"target": root, "files": inventory, "domains": dict(domains.most_common()), "counts": dict(counts),
+              "cost": cost, "verdicts": {s: ACTION[s] for s in present},
+              "cheapest_rewrite": [{"category": c, "fix": FIX[c]} for c in fix_cats],
+              "findings": findings, "unchanged_reviewed": unchanged}
+    color = "--color" in sys.argv
+
+    def summary():
+        print(f"Cost: audit ~{audit_t // 1000 or '<1'}k tokens {cost_bar(audit_t, color)} {cost['audit_size']}")
+        if fix_t:
+            print(f"      fix   ~{fix_t // 1000 or '<1'}k tokens {cost_bar(fix_t, color)} {cost['fix_size']} (upper bound; false positives cost nothing)")
+        else:
+            print("      fix   none needed")
+        print("What to do:" + ("".join(f"\n  {s.title()}: {ACTION[s]}" for s in present) or " No findings. OK to install after manual review."))
+        if fix_cats:
+            print("Cheapest rewrite (keeps the skill's purpose; apply only on the user's yes):")
+            for c in fix_cats: print(f"  - {c}: {FIX[c]}")
+
     if as_json:
         print(json.dumps(result, separators=(",", ":")))
     elif "--full" not in sys.argv:
         # Compact (default): same findings, merged per file:line, one snippet, no repetition
-        merged = {}
-        for f in findings:
-            k = (f["file"], f["line"])
-            m = merged.setdefault(k, {"sev": f["severity"], "tags": [], "snip": f["snippet"]})
-            if SEV_ORDER[f["severity"]] > SEV_ORDER[m["sev"]]: m["sev"] = f["severity"]
-            tag = f"{f['category']}:{f['issue']}"
-            if tag not in m["tags"]: m["tags"].append(tag)
         print(f"Files({len(inventory)}): " + ", ".join(inventory))
         if unchanged: print(f"Unchanged since reviewed-clean ({len(unchanged)}, skip manual re-read unless flagged): " + ", ".join(unchanged))
         print("Domains: " + (", ".join(f"{d}({n})" for d, n in domains.most_common()) or "none"))
         print("Counts: " + " ".join(f"{k[0]}={counts.get(k,0)}" for k in SEV_ORDER if k != "INFO"))
+        summary()
         grouped = {}  # MEDIUM/LOW repeats: one line per (file, tags) with all line numbers
         for (fp, ln), m in sorted(merged.items(), key=lambda kv: (-SEV_ORDER[kv[1]["sev"]], kv[0])):
             if SEV_ORDER[m["sev"]] >= 3:
@@ -201,7 +294,7 @@ def main():
     else:
         print(f"Target: {root}\nFiles ({len(inventory)}):"); [print("  -", p) for p in inventory]
         print("\nExternal domains referenced:"); [print(f"  - {d} ({n})") for d, n in domains.most_common()] or print("  (none)")
-        print("\nCounts:", {k: counts.get(k, 0) for k in SEV_ORDER})
+        print("\nCounts:", {k: counts.get(k, 0) for k in SEV_ORDER}); summary()
         for f in findings:
             if f["severity"] == "INFO": continue
             print(f"[{f['severity']}] {f['category']} {f['file']}:{f['line']} — {f['issue']}")

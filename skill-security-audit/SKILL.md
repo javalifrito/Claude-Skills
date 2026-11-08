@@ -26,7 +26,10 @@ Run this **before** any install, enable, or first use of a shared skill/plugin. 
    - Open and read the flagged issues and recent issue/PR comments (built-in browser or web-fetch) for complaints: data leaks, unexpected network calls, ads, account bans, maintainer takeover.
    - Check whether the source is the **real** upstream. Look for typosquats (`anthrop1c`, `claude-skils`), and check that the README author matches the repo owner.
 
-3. **Static scan.** `python3 -I <skill-dir>/scripts/scan.py <src-dir>`. It lists every file, every external domain, and its findings (CRITICAL/HIGH/MEDIUM/LOW).
+3. **Static scan.** `python3 -I <skill-dir>/scripts/scan.py <src-dir>`. It lists every file, every external domain, and its findings (CRITICAL/HIGH/MEDIUM/LOW), plus:
+   - **Cost**: estimated tokens for this audit and for fixing the findings, each with a gradient bar (🟩→🟥) and a size: Very Small (<5k) · Small (<20k) · Medium (<60k) · Large (<150k) · Very Large. Tell the user the audit cost before the manual review; if it is Large or Very Large, ask before continuing.
+   - **What to do**: a plain action for every severity found (Critical: do not install · High: do not install until fixed · Medium: check the flagged lines first · Low: OK, just be aware).
+   - **Cheapest rewrite**: the smallest fix per risk category. Add `--color` for a terminal colour bar.
 
 4. **Manual review (required; the scanner is only triage).** Read **every** file in the inventory, including sub-skills, `references/`, `scripts/`, `agents/`, `commands/`, `hooks/`, `.claude-plugin/plugin.json`, `.mcp.json`, `package.json`, `requirements.txt`, and hidden files. For each, answer:
    | # | Check | Look for |
@@ -55,12 +58,16 @@ Run this **before** any install, enable, or first use of a shared skill/plugin. 
    ```
    Skill: <name>  Source: <url>@<sha>  Lists: <ALLOWLISTED|UNKNOWN|BLOCKED>
    Verdict: APPROVE | APPROVE WITH CONDITIONS | REJECT
+   Cost: audit ~<n>k <bar> <size> · fix ~<n>k <bar> <size>
+   What to do: one plain line per severity found (copy from the scanner)
    Reputation: ★<n> · repo <age> · owner <age> · <contributors> contributors · issues: <summary>
    Findings (file:line, severity, what, why it matters) — real issues only, false positives explained in one line
    Network: domains contacted + data sent
    Permissions it needs vs. needs-to-have
    Conditions / mitigations (pin SHA, remove file X, deny tool Y, run in sandbox)
+   Cheapest rewrite: for confirmed findings only, the minimal edits that remove each risk and keep the skill's purpose, with the fix cost
    ```
+   If confirmed findings exist, offer to apply the cheapest rewrite to a copy of the skill and re-scan it. Edit only on the user's yes; never edit the original source.
    Verdict rules: any confirmed CRITICAL → REJECT. A confirmed HIGH without a strong legitimate reason → REJECT. Otherwise → APPROVE WITH CONDITIONS. APPROVE only when there are no HIGH findings, the source is reputable, and the code is fully reviewed.
 
 7. **Record.** Append one line to `<skill-dir>/audit-log.md`: date, skill, source@sha, verdict, top reason. Offer to add the source to the allowlist or blocklist in `sources.json` (edit only on the user's yes).
