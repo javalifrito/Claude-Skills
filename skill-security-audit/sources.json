@@ -1,0 +1,20 @@
+{
+  "_note": "value = github owner, owner/repo, or domain (lowercase). Allowlisted sources are still scanned; allowlisting only lowers the reputation bar. Edit only with the user's approval.",
+  "allowlist": [
+    {"value": "anthropics", "reason": "Anthropic official GitHub org", "added": "2026-11-08"},
+    {"value": "anthropics/skills", "reason": "Anthropic official skills repo", "added": "2026-11-08"},
+    {"value": "anthropics/claude-plugins-official", "reason": "Anthropic official plugin directory", "added": "2026-11-08"},
+    {"value": "modelcontextprotocol", "reason": "Official MCP org", "added": "2026-11-08"},
+    {"value": "claude.ai", "reason": "Anthropic first-party", "added": "2026-11-08"},
+    {"value": "anthropic.com", "reason": "Anthropic first-party", "added": "2026-11-08"},
+    {"value": "vercel-labs", "reason": "Vercel official (already-installed skills come from here)", "added": "2026-11-08"}
+  ],
+  "blocklist": [
+    {"value": "pastebin.com", "reason": "Code/prompts hosted on paste sites cannot be versioned or attributed", "added": "2026-11-08"},
+    {"value": "transfer.sh", "reason": "Anonymous file drop, common malware host", "added": "2026-11-08"},
+    {"value": "webhook.site", "reason": "Exfiltration endpoint", "added": "2026-11-08"},
+    {"value": "ngrok.io", "reason": "Ephemeral tunnel, unverifiable", "added": "2026-11-08"},
+    {"value": "bit.ly", "reason": "URL shortener hides the real source", "added": "2026-11-08"},
+    {"value": "tinyurl.com", "reason": "URL shortener hides the real source", "added": "2026-11-08"}
+  ]
+}
